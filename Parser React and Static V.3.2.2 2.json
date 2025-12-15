@@ -1,0 +1,1609 @@
+{
+  "name": "Parser React and Static V.3.2.2",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1696,
+        784
+      ],
+      "name": "Telegram Trigger",
+      "id": "be25e76c-61f7-4c4b-8328-488cac881425",
+      "webhookId": "2b5505d4-872d-4903-8bd4-2c6f13a3bd67",
+      "credentials": {
+        "telegramApi": {
+          "id": "sYneq6BPlPogCG9I",
+          "name": "Telegram CompSpy"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "^(https?://|www\\.)",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1472,
+        784
+      ],
+      "name": "Check URL",
+      "id": "f25d8d75-926f-437c-b7e1-92372a52ca3f"
+    },
+    {
+      "parameters": {
+        "jsCode": "let url = $json.message.text.trim();\nif (!url.startsWith('http://') && !url.startsWith('https://')) {\n  url = 'https://' + url;\n}\nconst baseUrlMatch = url.match(/(https?:\\/\\/[^\\/]+)/);\nconst baseUrl = baseUrlMatch ? baseUrlMatch[1] : url;\nconst hostnameMatch = baseUrl.match(/https?:\\/\\/([^\\/]+)/);\nconst hostname = hostnameMatch ? hostnameMatch[1] : '';\n\nreturn {\n  chatId: $json.message.chat.id,\n  competitorUrl: url,\n  baseUrl: baseUrl,\n  hostname: hostname\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -688,
+        512
+      ],
+      "name": "Initialize Crawl",
+      "id": "2fa23344-de15-4959-9a19-4a68da46f489"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=✅ Начинаю анализ сайта: \n{{ $json.competitorUrl }}\n\nИспользую headless browser для React/динамических сайтов...",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -512,
+        256
+      ],
+      "name": "Send Start Message",
+      "id": "d2ef21b6-c389-4919-854d-76b47417ca37",
+      "webhookId": "f0564b22-77ed-4c1c-b4d4-2084e9e1a9ef",
+      "credentials": {
+        "telegramApi": {
+          "id": "sYneq6BPlPogCG9I",
+          "name": "Telegram CompSpy"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://production-sfo.browserless.io/function",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "2TU2SydB6vLk9NMd6ef4654f2bc285a6ddfc4b80b4c143f64"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"code\": \"export default async ({ page }) => { const url = '{{ $json.competitorUrl }}'; await page.goto(url, { waitUntil: 'networkidle2' }); await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); await new Promise(r => setTimeout(r, 3000)); return await page.content(); }\"\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -336,
+        496
+      ],
+      "name": "Fetch Page (Browserless)",
+      "id": "9c1858cb-b00b-4ab8-86db-712fd8a470c4"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -192,
+        192
+      ],
+      "id": "5b5127fc-c8f3-4816-9c6d-373309dd7f4c",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = String($json.data || $json.body || \"\");\n\n// Получаем URL товара из предыдущей ноды\nconst productUrl = $('Extract Products from Category').item.json.productUrl || \n                   $json.productUrl || \"\";\n\n// Получаем chatId\nconst chatId = $('Extract Products from Category').item.json.chatId || \n               $json.chatId || \"\";\n\nconsole.log(\"Parsing:\", productUrl);\nconsole.log(\"Chat ID:\", chatId);\nconsole.log(\"HTML length:\", html.length);\n\nif (!html || html.length < 500) {\n  return {\n    json: {\n      productUrl,\n      chatId,\n      title: \"Empty page\",\n      price: \"—\",\n      sku: \"—\",\n      brand: \"—\",\n      city: \"—\"\n    }\n  };\n}\n\n// TITLE\nlet title = html.match(/<title[^>]*>([^<]*)<\\/title>/i)?.[1] || \n           html.match(/<h1[^>]*>([^<]*)<\\/h1>/i)?.[1] ||\n           html.match(/<meta[^>]*property=[\"']og:title[\"'][^>]*content=[\"']([^\"']*)[\"']/i)?.[1] ||\n           \"No title\";\ntitle = title.split(/ [|\\-–—] /)[0].trim();\n\n// PRICE\nlet price = \"—\";\nconst pricePatterns = [\n  /(?:цена|price)[^>\\d]*([\\d\\s ]+(?:\\.[\\d]{2})?\\s*(?:₽|руб|р\\.|USD|EUR))/i,\n  /(?:₽|руб|р\\.)\\s*([\\d\\s ]+)/i,\n  /data-price=[\"']([\\d\\.,\\s]+)[\"']/i,\n  /itemprop=[\"']price[\"'][^>]*content=[\"']([\\d\\.,]+)[\"']/i,\n  /\"price\":\\s*\"?([\\d\\.,]+)\"?/i,\n  /<span[^>]*class=[\"'][^\"']*price[^\"']*[\"'][^>]*>([^<]+)<\\/span>/i\n];\n\nfor (const pattern of pricePatterns) {\n  const match = html.match(pattern);\n  if (match && match[1]) {\n    const foundPrice = match[1].replace(/[^\\d,.]/g, \"\").replace(\",\", \".\");\n    if (foundPrice && !isNaN(parseFloat(foundPrice))) {\n      price = foundPrice;\n      break;\n    }\n  }\n}\n\n// DESCRIPTION\nlet description = \"—\";\nconst descMeta = html.match(/<meta[^>]*name=[\"']description[\"'][^>]*content=[\"']([^\"']*)[\"']/i)?.[1] ||\n                 html.match(/<meta[^>]*property=[\"']og:description[\"'][^>]*content=[\"']([^\"']*)[\"']/i)?.[1];\n\nif (descMeta) {\n  description = descMeta.replace(/<[^>]*>/g, \"\").replace(/\\s+/g, \" \").trim().slice(0, 300);\n}\n\n// SKU\nlet sku = \"—\";\nconst skuPatterns = [\n  html.match(/itemprop=[\"']sku[\"'][^>]*content=[\"']([^\"']*)[\"']/i),\n  html.match(/data-sku=[\"']([^\"']*)[\"']/i),\n  html.match(/sku[\"']?\\s*[=:]\\s*[\"']?([^\"'\\s<]+)/i),\n  html.match(/\"sku\":\\s*\"([^\"]*)\"/i),\n  html.match(/\"id\":\\s*\"([^\"]*)\"/i)\n];\n\nfor (const match of skuPatterns) {\n  if (match && match[1]) {\n    sku = match[1].trim();\n    break;\n  }\n}\n\n// BRAND\nlet brand = \"Unknown\";\nconst brandPatterns = [\n  html.match(/itemprop=[\"']brand[\"'][^>]*content=[\"']([^\"']*)[\"']/i),\n  html.match(/<meta[^>]*property=[\"']product:brand[\"'][^>]*content=[\"']([^\"']*)[\"']/i),\n  html.match(/\"brand\":\\s*\"([^\"]*)\"/i),\n  html.match(/\"manufacturer\":\\s*\"([^\"]*)\"/i)\n];\n\nfor (const match of brandPatterns) {\n  if (match && match[1]) {\n    brand = match[1].trim();\n    break;\n  }\n}\n\n// CITY\nlet city = \"—\";\nconst cityPatterns = [\n  // Структурированные данные\n  html.match(/itemprop=[\"']addressLocality[\"'][^>]*content=[\"']([^\"']*)[\"']/i),\n  html.match(/\"addressLocality\":\\s*\"([^\"]*)\"/i),\n  html.match(/\"city\":\\s*\"([^\"]*)\"/i),\n  \n  // Мета-теги\n  html.match(/<meta[^>]*name=[\"']city[\"'][^>]*content=[\"']([^\"']*)[\"']/i),\n  \n  // Текстовые паттерны (Россия)\n  html.match(/(?:город|city|г\\.)[\\s:]*([А-ЯЁа-яё\\s-]+)(?:[,\\.]|<)/i),\n  html.match(/Доставка[\\s\\w]*в[\\s]*([А-ЯЁ][а-яё]+)/i),\n  html.match(/Самовывоз[\\s\\w]*из[\\s]*([А-ЯЁ][а-яё]+)/i),\n  \n  // Английские паттерны\n  html.match(/(?:Location|City)[\\s:]*([A-Z][a-z\\s]+)(?:[,\\.<])/i),\n  html.match(/Shipping[\\s\\w]*to[\\s]*([A-Z][a-z]+)/i)\n];\n\nfor (const match of cityPatterns) {\n  if (match && match[1]) {\n    const foundCity = match[1].trim();\n    // Фильтруем слишком короткие или длинные (вероятно не города)\n    if (foundCity.length >= 3 && foundCity.length <= 30) {\n      city = foundCity;\n      break;\n    }\n  }\n}\n\nconsole.log(\"Parsed:\", { productUrl, chatId, title, price, sku, brand, city });\n\nreturn {\n  json: {\n    productUrl,\n    chatId,\n    title: title || \"No title\",\n    price,\n    description,\n    sku,\n    brand,\n    city\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        192
+      ],
+      "name": "Parse Product",
+      "id": "39d8d31b-4d8c-44d3-ab1e-84dd301a57e2"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=🛍️ Найдено товаров: {{ $json.totalProducts }}\n\n{{ $json.allProducts.map((p, i) => `${i+1}. ${p.title}\\n💰 Цена: ${p.price} ₽\\n📦 SKU: ${p.sku}\\n🏷️ Бренд: ${p.brand}\\n🏙️ Город: ${p.city}\\n🔗 ${p.productUrl}`).join('\\n\\n') }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1440,
+        32
+      ],
+      "name": "Send Results",
+      "id": "2e6b285b-7f9d-4d62-a62d-080f3acf96dc",
+      "webhookId": "d016d387-59e9-4edf-8e3e-43abfd846a3c",
+      "credentials": {
+        "telegramApi": {
+          "id": "sYneq6BPlPogCG9I",
+          "name": "Telegram CompSpy"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const categories = $json.categories || [];\nconst chatId = $json.chatId;\nconst baseUrl = $json.baseUrl;\nconst hostname = $json.hostname;\n\nconsole.log(\"All categories:\", categories);\n\n// Убираем служебные страницы\nconst validCategories = categories.filter(url => {\n  const path = url.toLowerCase();\n  return !path.includes(\"lookbook\") &&\n         !path.includes(\"search\") &&\n         !path.includes(\"login\") &&\n         !path.includes(\"signup\") &&\n         !path.includes(\"members\");\n});\n\nconsole.log(\"Valid categories:\", validCategories);\n\n// БЕРЁМ ТОЛЬКО ПЕРВУЮ КАТЕГОРИЮ\nconst firstCategory = validCategories.slice(0, 1);\n\nif (firstCategory.length === 0) {\n  return [{\n    json: {\n      error: \"No valid categories\",\n      chatId\n    }\n  }];\n}\n\nreturn firstCategory.map(url => ({\n  json: { \n    categoryUrl: url, \n    chatId, \n    baseUrl, \n    hostname \n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        192
+      ],
+      "id": "28dd1340-4666-4764-bce5-89c9b444f46b",
+      "name": "Loop Over Categories"
+    },
+    {
+      "parameters": {
+        "jsCode": "// === НОДА 1: Extract Categories (замени Extract Links) ===\n\nconst items = $input.all();\nconst htmlItem = items.find(i => i.json.data || i.json.body);\nconst stateItem = items.find(i => i.json.baseUrl);\n\nif (!htmlItem || !stateItem) {\n  return [{ json: { categories: [], products: [] }}];\n}\n\nconst html = (htmlItem.json.data || htmlItem.json.body || \"\").toString();\nconst baseUrl = stateItem.json.baseUrl;\nconst hostname = stateItem.json.hostname;\n\nconst links = new Set();\nconst hrefRegex = /href=[\"']([^\"']+)[\"']/gi;\nlet m;\nwhile ((m = hrefRegex.exec(html))) {\n  links.add(m[1]);\n}\n\nconst categories = new Set();\nconst products = new Set();\n\nfor (let link of links) {\n  if (!link || link.startsWith(\"#\") || link.startsWith(\"javascript:\")) continue;\n\n  let url = link;\n  if (url.startsWith(\"//\")) url = \"https:\" + url;\n  else if (url.startsWith(\"/\")) url = baseUrl + url;\n  else if (!url.startsWith(\"http\")) url = baseUrl + \"/\" + url;\n\n  url = url.split(\"#\")[0].split(\"?\")[0].trim().replace(/\\/+$/, '');\n\n  if (!url.includes(hostname)) continue;\n  if (/\\.(css|js|jpg|png|gif|svg|pdf)$/i.test(url)) continue;\n\n  const path = url.toLowerCase();\n  \n  // Категории (короткие URL без /product/)\n  const isCategory = \n    path.split(\"/\").length === 4 && // типа https://site.com/category\n    !path.includes(\"/product\") &&\n    !path.includes(\"/item\") &&\n    !path.includes(\"/cart\") &&\n    !path.includes(\"/account\") &&\n    url !== baseUrl;\n\n  // Товары (длинные URL или с /product/)\n  const isProduct = \n    path.includes(\"/product/\") ||\n    path.includes(\"/item/\") ||\n    path.split(\"/\").length >= 5; // https://site.com/category/product-name\n\n  if (isCategory) categories.add(url);\n  if (isProduct) products.add(url);\n}\n\nconsole.log(\"Categories:\", Array.from(categories));\nconsole.log(\"Direct products:\", Array.from(products));\n\nreturn [{\n  json: {\n    ...stateItem.json,\n    categories: Array.from(categories).slice(0, 10), // Макс 10 категорий\n    directProducts: Array.from(products),\n    needsCrawl: categories.size > 0\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        192
+      ],
+      "name": "Extract Categories",
+      "id": "2042467f-2894-404b-9c9b-73f0b18560ab"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://production-sfo.browserless.io/content",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "2TU2SydB6vLk9NMd6ef4654f2bc285a6ddfc4b80b4c143f64"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"url\": \"{{ $json.categoryUrl }}\"\n}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 3000
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        416,
+        192
+      ],
+      "id": "100e93ec-582b-44ec-8fcc-e51770c046c0",
+      "name": "Fetch Category Page"
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = ($json.data || $json.body || \"\").toString();\n\n// Получаем данные из предыдущей ноды\nconst previousNode = $('Loop Over Categories').item.json;\nconst baseUrl = previousNode.baseUrl;\nconst hostname = previousNode.hostname;\nconst chatId = previousNode.chatId;\nconst categoryUrl = previousNode.categoryUrl;\n\nconsole.log(\"=== PARSING CATEGORY ===\");\nconsole.log(\"Category URL:\", categoryUrl);\nconsole.log(\"HTML length:\", html.length);\n\nif (!categoryUrl || !baseUrl || !hostname) {\n  return [{\n    json: {\n      error: \"Missing data from Loop node\",\n      previousNode\n    }\n  }];\n}\n\nconst links = new Set();\nconst regex = /href=[\"']([^\"']+)[\"']/gi;\nlet m;\nwhile ((m = regex.exec(html))) {\n  links.add(m[1]);\n}\n\nconsole.log(\"Total links found:\", links.size);\n\nconst products = new Set();\n\nfor (let link of links) {\n  if (!link || link.startsWith(\"#\") || link.startsWith(\"javascript:\")) continue;\n\n  let url = link;\n  if (url.startsWith(\"/\")) url = baseUrl + url;\n  else if (!url.startsWith(\"http\")) continue;\n\n  url = url.split(\"#\")[0].split(\"?\")[0].trim();\n\n  if (!url.includes(hostname)) continue;\n  if (/\\.(css|js|jpg|png|svg|pdf)$/i.test(url)) continue;\n\n  const path = url.toLowerCase();\n  const categoryPath = categoryUrl.toLowerCase();\n  \n  if (path.startsWith(categoryPath + \"/\") && \n      path !== categoryPath &&\n      !path.includes(\"/cart\")) {\n    products.add(url);\n  }\n}\n\nconsole.log(\"Found products:\", Array.from(products));\n\nreturn Array.from(products).map(url => ({\n  json: { \n    productUrl: url, \n    chatId \n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        192
+      ],
+      "id": "91595fd0-620b-46e2-b0d4-deb4f28b2ee6",
+      "name": "Extract Products from Category"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://production-sfo.browserless.io/function",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "2TU2SydB6vLk9NMd6ef4654f2bc285a6ddfc4b80b4c143f64"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"code\": \"export default async ({ page }) => { await page.goto('{{ $json.productUrl }}', { waitUntil: 'domcontentloaded', timeout: 60000 }); await new Promise(r => setTimeout(r, 3000)); return await page.content(); }\"\n}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        848,
+        192
+      ],
+      "name": "Fetch ALL Product Pages",
+      "id": "6ae76e17-0c09-4340-a63a-1a9ccf3d9454",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\n\n// Находим chatId\nlet chatId = null;\nfor (const item of allItems) {\n  if (item.json.chatId) {\n    chatId = item.json.chatId;\n    break;\n  }\n}\n\n// Собираем товары\nconst allProducts = allItems.map(item => item.json);\n\nconsole.log(\"Total products collected:\", allProducts.length);\n\nreturn [{\n  json: {\n    chatId: chatId,\n    allProducts: allProducts,\n    totalProducts: allProducts.length\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1232,
+        192
+      ],
+      "name": "Collect All Products",
+      "id": "5757497f-6e65-46a5-abb1-1fd6712fc324"
+    },
+    {
+      "parameters": {
+        "jsCode": "const allProducts = $json.allProducts || [];\n\n// Разворачиваем массив товаров в отдельные строки\nreturn allProducts.map(product => ({\n  json: {\n    Timestamp: new Date().toISOString(),\n    Title: product.title || \"\",\n    Price: product.price || \"\",\n    SKU: product.sku || \"\",\n    Brand: product.brand || \"\",\n    City: product.city || \"\",\n    Description: product.description || \"\",\n    URL: product.productUrl || \"\"\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1456,
+        320
+      ],
+      "id": "81d63e7e-921e-4379-a046-4fe4f9cc8a68",
+      "name": "Prepare for Google Sheets"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1-wbWRfwiykBueIuJSKZc9q19JlqQgW1qvj9rG5evPHA",
+          "mode": "list",
+          "cachedResultName": "Parser-Products",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1-wbWRfwiykBueIuJSKZc9q19JlqQgW1qvj9rG5evPHA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1-wbWRfwiykBueIuJSKZc9q19JlqQgW1qvj9rG5evPHA/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $json.Timestamp }}",
+            "Title": "={{ $json.Title }}",
+            "Price": "={{ $json.Price }}",
+            "SKU": "={{ $json.SKU }}",
+            "Brand": "={{ $json.Brand }}",
+            "City": "={{ $json.City }}",
+            "Description": "={{ $json.Description }}",
+            "URL": "={{ $json.URL }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Title",
+              "displayName": "Title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Price",
+              "displayName": "Price",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SKU",
+              "displayName": "SKU",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Brand",
+              "displayName": "Brand",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "City",
+              "displayName": "City",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Description",
+              "displayName": "Description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "URL",
+              "displayName": "URL",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1632,
+        320
+      ],
+      "id": "596a6387-dd8e-45f4-9047-e6901996d89d",
+      "name": "Save to Google Sheets",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "D4WG1yGJIpIeyIXM",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot7672853613:AAFyiZqOeVqO1TRI2sqxg6ZySSU4ayP159U/sendChatAction",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": {{ $('Telegram Trigger').item.json.message.chat.id }},\n  \"action\": \"typing\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "7ea75efe-def6-49d7-b3d7-82bbb9b2ea43",
+      "name": "Typing"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d98b27f8-cc16-46b1-8eb4-b259ee175ce3",
+              "leftValue": "={{ $json.useBrowser }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1216,
+        768
+      ],
+      "id": "3154f486-2b3e-4cee-aeed-22b47cbf1b9c",
+      "name": "Check Site Type"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Безопасно считаем количество товаров и страниц\nconst products = Array.isArray($json.productUrls) ? $json.productUrls.length : 0;\nconst visited  = Array.isArray($json.visitedUrls) ? $json.visitedUrls.length : 0;\n\n// Создаём финальное сообщение\nconst finalMessage =\n`📊 Найдено товаров: ${products}\nПросканировано страниц: ${visited}\n\nНачинаю сбор данных о товарах...`;\n\n// Возвращаем обновлённый state + готовый текст\nreturn {\n  ...$json,\n  finalMessage,\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -272,
+        1024
+      ],
+      "id": "806a3f27-3f58-4391-accb-2eb6e0cd4113",
+      "name": "Format Summary Message"
+    },
+    {
+      "parameters": {
+        "jsCode": "// === Universal Detect Catalog Page (WB + Ozon included) ===\n\n// Получаем данные\nconst internal = $json.internalPages || [];\nconst product = $json.productPages || [];\nconst all = [...internal, ...product];\n\nif (all.length === 0) {\n  return {\n    catalogPage: null,\n    reason: \"No pages to analyze\",\n  };\n}\n\n// Нормализуем URL\nconst normalize = url =>\n  url.replace(/\\/+$/, \"\").toLowerCase();\n\n// === 1. Паттерны КАТАЛОГОВ (универсальные + WB + Ozon) ===\nconst catalogPatterns = [\n  // обычные магазины\n  \"/shop\",\n  \"/catalog\",\n  \"/store\",\n  \"/collections\",\n  \"/category\",\n  \"/products\",\n  \"/goods\",\n  \"/all-products\",\n  \"/katalog\",\n  \"/magazin\",\n  \"/produkty\",\n  \"/storefront\",\n\n  // WILDBERRIES\n  \"/allcatalog\",\n  \"/catalog/0\",\n  \"/catalog/\",\n\n  // OZON\n  \"/highlight\",\n  \"/seller\",\n  \"/brand\",\n  \"/productlist\",\n];\n\n// === 2. Паттерны ТОВАРОВ (универсальные + WB + Ozon)\nconst productPatterns = [\n  // обычные\n  \"/product/\",\n  \"/item/\",\n  \"/p/\",\n  \"/goods/\",\n  \"/sku/\",\n\n  // Wildberries\n  \"/detail.aspx\",\n\n  // Ozon\n  \"/product/\",\n];\n\n// Определяем товарную страницу\nconst isProductUrl = url => {\n  const low = normalize(url);\n  return productPatterns.some(p => low.includes(p));\n};\n\n// Определяем каталог\nconst childrenCount = {};\n\nfor (const page of internal) {\n  const base = normalize(page);\n  childrenCount[page] = all.filter(u =>\n    normalize(u).startsWith(base) &&\n    normalize(u) !== base\n  ).length;\n}\n\n// --- 3. Кандидаты по паттернам ---\nconst patternCandidates = internal.filter(url =>\n  catalogPatterns.some(p =>\n    normalize(url).includes(p)\n  )\n);\n\n// --- 4. Кандидаты по структуре ---\nconst sortedByChildren = Object.entries(childrenCount)\n  .sort((a, b) => b[1] - a[1])\n  .map(x => x[0]);\n\nconst topStructureCandidates = sortedByChildren.slice(0, 3);\n\n// --- 5. Чистим от товаров ---\nconst filterOutProducts = arr =>\n  arr.filter(url => !isProductUrl(url));\n\nconst cleanPatternCandidates = filterOutProducts(patternCandidates);\nconst cleanStructureCandidates = filterOutProducts(topStructureCandidates);\n\n// --- 6. Приоритет выбора каталога ---\n\n// (1) Явное совпадение по паттернам → выбираем самый короткий\nif (cleanPatternCandidates.length > 0) {\n  const best = cleanPatternCandidates.sort((a, b) => a.length - b.length)[0];\n  return {\n    catalogPage: best,\n    candidates: cleanPatternCandidates,\n    method: \"pattern-match (universal + WB + OZON)\",\n  };\n}\n\n// (2) По структуре → у кого больше дочерних страниц\nif (cleanStructureCandidates.length > 0) {\n  const best = cleanStructureCandidates[0];\n  return {\n    catalogPage: best,\n    candidates: cleanStructureCandidates,\n    method: \"structure-detection\",\n    childrenCount,\n  };\n}\n\n// (3) Fallback → главная\nconst root = internal.find(url =>\n  normalize(url) === normalize($json.baseUrl)\n);\n\nreturn {\n  catalogPage: root || internal[0] || null,\n  candidates: internal,\n  method: \"fallback-root\",\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        1024
+      ],
+      "id": "e554eb84-d693-4782-a10d-647a3b2f7e78",
+      "name": "Detect Catalog Page"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.catalogPage }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        448,
+        1440
+      ],
+      "id": "d0c30108-9f14-4fc5-8cad-963c7557bd8e",
+      "name": "Fetch Products"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        864,
+        1264
+      ],
+      "id": "0b80347b-2502-4386-bcae-85538dcee55a",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// === ПОЛУЧАЕМ ВСЕ ВХОДЫ ===\nconst items = $input.all();\n\n// === 1. HTML каталога — ВСЕГДА item[1] ===\nconst htmlItem = items[1];\nif (!htmlItem || (!htmlItem.json.data && !htmlItem.json.body)) {\n  return [{ json: { error: \"Catalog HTML missing in item[1]\" }}];\n}\n\nconst html = htmlItem.json.data || htmlItem.json.body;\n\n\n// === 2. Состояние — ВСЕГДА item[2] ===\nconst stateItem = items[2];\nif (!stateItem) {\n  return [{ json: { error: \"Missing state item (item[2])\" }}];\n}\n\nconst baseUrl = stateItem.json.baseUrl;\nconst hostname = stateItem.json.hostname;\nconst chatId = stateItem.json.chatId;\n\nif (!baseUrl || !hostname) {\n  return [{ json: { error: \"Missing baseUrl or hostname\" }}];\n}\n\n\n// === 3. Паттерны продукта ===\nconst productPatterns = [\n  \"/product\",\n  \"/item\",\n  \"/sku\",\n  \"/goods\",\n  \"/detail.aspx\",   // WB\n  \"/id/\",           // Ozon\n  \"-p-\",\n  \"_p_\",\n  \"/shop/\"          // TEZZA товары ВСЕ тут\n];\n\n\n// === 4. Извлекаем ссылки ===\nconst links = [];\nconst regex = /href=[\"']([^\"']+)[\"']/gi;\nlet m;\n\nwhile ((m = regex.exec(html)) !== null) {\n  links.push(m[1]);\n}\n\n\n// === 5. Нормализуем и фильтруем ===\nconst productPages = [];\n\nfor (let link of links) {\n\n  if (!link) continue;\n\n  let abs = \"\";\n\n  if (link.startsWith(\"http\")) abs = link;\n  else if (link.startsWith(\"//\")) abs = \"https:\" + link;\n  else if (link.startsWith(\"/\")) abs = baseUrl + link;\n  else abs = baseUrl + \"/\" + link;\n\n  const clean = abs.split(\"#\")[0].split(\"?\")[0];\n\n  const host = clean.match(/^https?:\\/\\/([^/]+)/)?.[1] || \"\";\n\n  if (host !== hostname) continue;\n\n  const low = clean.toLowerCase();\n\n  if (productPatterns.some(p => low.includes(p))) {\n    if (!productPages.includes(clean)) {\n      productPages.push(clean);\n    }\n  }\n}\n\n\n// === 6. Возвращаем результат ===\nreturn [{\n  json: {\n    baseUrl,\n    hostname,\n    chatId,\n    productPages,\n    totalProducts: productPages.length\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        1072
+      ],
+      "id": "a11d8b74-ce0b-4021-b943-2282d80c913f",
+      "name": "Extract Product Links"
+    },
+    {
+      "parameters": {
+        "jsCode": "const productUrls = $json.productPages || [];\nconst baseUrl = $json.baseUrl;\nconst chatId = $json.chatId;\n\nreturn productUrls.map(url => ({\n  json: {\n    productUrl: url,\n    baseUrl: baseUrl,\n    chatId: chatId\n  }\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1232,
+        1072
+      ],
+      "id": "f0516aec-426a-4a0a-bf49-a79c3338f84d",
+      "name": "Split Products"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.productUrl}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1424,
+        1072
+      ],
+      "id": "1c3fad3a-d13a-452f-a204-980e9eb08cdb",
+      "name": "Fetch all Product Pages"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const raw = $json.data || $json.body || \"\";\nconst html = String(raw);\nconst productUrl = $input.item.json.productUrl || \"\";\n\nconsole.log(\"Parsing:\", productUrl);\nconsole.log(\"HTML length:\", html.length);\n\n// UNIVERSAL CHECK - only basic content validation\nconst hasContent = html && html.length > 500;\n\nif (!hasContent) {\n  return {\n    json: {\n      productUrl,\n      title: \"Not enough content\",\n      price: \"—\",\n      description: \"—\",\n      sku: \"—\",\n      brand: \"Unknown\"\n    }\n  };\n}\n\n// TITLE PARSING\nlet title = html.match(/<title[^>]*>([^<]*)<\\/title>/i)?.[1]?.trim() || \n           html.match(/<h1[^>]*>([^<]*)<\\/h1>/i)?.[1]?.trim() ||\n           html.match(/<meta[^>]*property=[\"']og:title[\"'][^>]*content=[\"']([^\"']*)[\"']/i)?.[1]?.trim() ||\n           \"No title\";\n\n// Clean title from site suffixes\ntitle = title.split(/ [|\\-–—] /)[0].split(/ \\| /)[0].trim();\n\n// PRICE PARSING\nlet price = \"—\";\nconst pricePatterns = [\n  /(?:цена|price)[^>\\d]*([\\d\\s ]+(?:\\.[\\d]{2})?)\\s*(?:₽|руб|р\\.|USD|EUR)/i,\n  /(?:₽|руб|р\\.)\\s*([\\d\\s ]+)/i,\n  /data-price=[\"']([\\d\\.,\\s]+)[\"']/i,\n  /itemprop=[\"']price[\"'][^>]*content=[\"']([\\d\\.,]+)[\"']/i,\n  /\"price\":\\s*\"?([\\d\\.,]+)\"?/i,\n  /<span[^>]*class=[\"'][^\"']*price[^\"']*[\"'][^>]*>([^<]+)<\\/span>/i,\n  /<span[^>]*data-price=[\"']?([\\d\\.,]+)[\"']?[^>]*>/i\n];\n\nfor (const pattern of pricePatterns) {\n  const match = html.match(pattern);\n  if (match && match[1]) {\n    const foundPrice = match[1].replace(/[^\\d,.]/g, \"\").replace(\",\", \".\");\n    if (foundPrice && !isNaN(parseFloat(foundPrice))) {\n      price = foundPrice;\n      break;\n    }\n  }\n}\n\n// DESCRIPTION PARSING - improved to extract text from HTML\nlet description = \"—\";\nconst descMeta = html.match(/<meta[^>]*name=[\"']description[\"'][^>]*content=[\"']([^\"']*)[\"']/i)?.[1] ||\n                 html.match(/<meta[^>]*property=[\"']og:description[\"'][^>]*content=[\"']([^\"']*)[\"']/i)?.[1];\n\nif (descMeta) {\n  description = descMeta.replace(/<[^>]*>/g, \"\").replace(/\\s+/g, \" \").trim().slice(0, 300);\n} else {\n  // Fallback to product-name div content\n  const productNameMatch = html.match(/<div[^>]*class=[\"'][^\"']*product-name[^\"']*[\"'][^>]*>([^<]*)<\\/div>/i);\n  if (productNameMatch && productNameMatch[1]) {\n    description = productNameMatch[1].replace(/<[^>]*>/g, \"\").replace(/\\s+/g, \" \").trim().slice(0, 300);\n  }\n}\n\n// SKU PARSING - working well!\nlet sku = \"—\";\nconst skuPatterns = [\n  html.match(/itemprop=[\"']sku[\"'][^>]*content=[\"']([^\"']*)[\"']/i),\n  html.match(/data-sku=[\"']([^\"']*)[\"']/i),\n  html.match(/sku[\"']?\\s*[=:]\\s*[\"']?([^\"'\\s<]+)/i),\n  html.match(/\"sku\":\\s*\"([^\"]*)\"/i),\n  html.match(/\"id\":\\s*\"([^\"]*)\"/i),\n  html.match(/<span[^>]*class=[\"'][^\"']*sku[^\"']*[\"'][^>]*>([^<]+)<\\/span>/i)\n];\n\nfor (const match of skuPatterns) {\n  if (match && match[1]) {\n    sku = match[1].trim();\n    break;\n  }\n}\n\n// IMPROVED BRAND PARSING - extract from product names and titles\nlet brand = \"Unknown\";\n\n// Pattern 1: Look for brand in product names (e.g., \"Tezza Light\", \"Tezza Rollo\")\nconst productNameMatch = html.match(/Tezza[\\s\\w]+/i);\nif (productNameMatch) {\n  brand = \"Tezza\";\n} else {\n  // Pattern 2: Structured data\n  const brandPatterns = [\n    html.match(/itemprop=[\"']brand[\"'][^>]*content=[\"']([^\"']*)[\"']/i),\n    html.match(/<meta[^>]*property=[\"']product:brand[\"'][^>]*content=[\"']([^\"']*)[\"']/i),\n    html.match(/\"brand\":\\s*\"([^\"]*)\"/i),\n    html.match(/\"manufacturer\":\\s*\"([^\"]*)\"/i),\n    html.match(/<div[^>]*class=[\"'][^\"']*brand[^\"']*[\"'][^>]*>([^<]+)<\\/div>/i),\n    html.match(/<span[^>]*class=[\"'][^\"']*brand[^\"']*[\"'][^>]*>([^<]+)<\\/span>/i)\n  ];\n\n  for (const match of brandPatterns) {\n    if (match && match[1]) {\n      brand = match[1].trim();\n      break;\n    }\n  }\n}\n\nconsole.log(\"Parsed data:\", { title, price, sku, brand });\n\nreturn {\n  json: {\n    productUrl,\n    title: title || \"No title\",\n    price,\n    description,\n    sku,\n    brand\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1632,
+        1072
+      ],
+      "id": "f71e35c1-1666-4eef-9a52-32fd59d3bb61",
+      "name": "Parse Products"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Собираем все товары в один массив\nconst allItems = $input.all();\n\n// Находим chatId в любом из товаров\nlet chatId = null;\nfor (const item of allItems) {\n  if (item.json.chatId) {\n    chatId = item.json.chatId;\n    break;\n  }\n}\n\n// Возвращаем один элемент со всеми товарами\nreturn [{\n  json: {\n    chatId: chatId,\n    allProducts: allItems.map(item => item.json)\n  },\n  pairedItem: allItems[0]?.pairedItem\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1840,
+        1072
+      ],
+      "id": "e8476ee6-da0b-4495-a295-1485ee9dfcd8",
+      "name": "Collect all Products"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Split Products').item.json.chatId }}",
+        "text": "=🛍️ ВСЕ ТОВАРЫ ({{ $json.allProducts.length }} шт)\n\n{{ $json.allProducts.slice(0, 30).map((item, index) => `${index + 1}. ${item.title}\nЦена: ${item.price}\nSku: ${item.sku}\nБренд: ${item.brand}`).join('\\n\\n') }}\n \n{{ $json.allProducts.slice(30).map((item, index) => `${index + 31}. ${item.title}\nЦена: ${item.price}\nSku: ${item.sku}\nБренд: ${item.brand}`).join('\\n\\n') }}\n",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2064,
+        880
+      ],
+      "id": "8b785e33-6046-4486-834f-167996c8af8f",
+      "name": "Send a Product message",
+      "webhookId": "551c8e69-174f-4a3d-aaaf-ec688a211033",
+      "credentials": {
+        "telegramApi": {
+          "id": "sYneq6BPlPogCG9I",
+          "name": "Telegram CompSpy"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Нормализация URL без использования URL API\nlet url = $json.message.text.trim();\n\n// Добавляем https:// если отсутствует протокол\nif (!url.startsWith('http://') && !url.startsWith('https://')) {\n  url = 'https://' + url;\n}\n\n// Извлекаем базовый домен с помощью регулярного выражения\n// Паттерн: protocol://domain (без пути)\nconst baseUrlMatch = url.match(/(https?:\\/\\/[^\\/]+)/);\nconst baseUrl = baseUrlMatch ? baseUrlMatch[1] : url;\n\n// Извлекаем только hostname для сравнения\nconst hostnameMatch = baseUrl.match(/https?:\\/\\/([^\\/]+)/);\nconst hostname = hostnameMatch ? hostnameMatch[1] : '';\n\nreturn {\n  chatId: $json.message.chat.id,\n  competitorUrl: url,\n  baseUrl: baseUrl,\n  hostname: hostname,\n  startTime: new Date().toISOString(),\n  crawlQueue: [url],\n  visitedUrls: [],\n  productUrls: [],\n  maxPages: 50,\n  maxDepth: 3,\n  crawledCount: 0,\n  crawlingDone: false   // ← ЭТО ОБЯЗАТЕЛЬНО!\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -992,
+        880
+      ],
+      "id": "bd38a4ed-fd3c-4ac7-822a-df69d270d52c",
+      "name": "Initialize Crawl1"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.competitorUrl }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -832,
+        1088
+      ],
+      "id": "5486a357-9563-4557-8d16-bca4c7604fc9",
+      "name": "Fetch Page"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -656,
+        1024
+      ],
+      "id": "96cac193-c765-43b6-a8f9-6c6302cd0fdc",
+      "name": "Merge2"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst htmlItem = items.find(i => i.json.data || i.json.body);\nconst stateItem = items.find(i => i.json.baseUrl);\n\nif (!htmlItem || !stateItem) {\n  return [{ json: { productPages: [], internalPages: [] }}];\n}\n\nconst html = (htmlItem.json.data || htmlItem.json.body || \"\").toString();\nconst baseUrl = stateItem.json.baseUrl;\nconst hostname = stateItem.json.hostname;\n\nconst links = [];\nconst regex = /href=[\"']([^\"']+)[\"']/gi;\nlet m;\nwhile ((m = regex.exec(html))) {\n  links.push(m[1]);\n}\n\nconst productPages = new Set();\nconst internalPages = new Set();\n\nfor (let link of links) {\n  if (!link || link.startsWith(\"#\") || link.startsWith(\"javascript:\") || link.includes(\"mailto:\")) continue;\n\n  let url = link;\n  if (url.startsWith(\"//\")) url = \"https:\" + url;\n  if (url.startsWith(\"/\")) url = baseUrl + url.substring(1);\n  if (!url.startsWith(\"http\")) url = baseUrl + url;\n\n  url = url.split(\"#\")[0].split(\"?\")[0].replace(/\\/+$/, \"\");\n\n  if (!url.includes(hostname)) continue;\n  if (/\\.(css|js|jpg|png|gif|svg|pdf|xml|json)$/i.test(url)) continue;\n\n  const path = url.replace(baseUrl, \"/\").toLowerCase();\n\n  // УНИВЕРСАЛЬНЫЙ ДЕТЕКТОР ТОВАРА 2025\n  if (\n    path.includes(\"/shop/\") && path.split(\"/\").length >= 4 ||\n    path.includes(\"/product/\") || \n    path.includes(\"/tovar/\") || \n    path.includes(\"/item/\") ||\n    path.includes(\"/catalog/\") && path.split(\"/\").length >= 4 ||\n    /\\/[a-z0-9-]{8,}$/.test(path)\n  ) {\n    productPages.add(url);\n  } else {\n    internalPages.add(url);\n  }\n}\n\nreturn [{\n  json: {\n    ...stateItem.json,\n    productPages: Array.from(productPages),\n    internalPages: Array.from(internalPages),\n    totalFound: productPages.size,\n    crawlingDone: true   // ← ОДИН ПРОХОД, БОЛЬШЕ НЕ НУЖЕН!\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -464,
+        1024
+      ],
+      "id": "784ef949-b360-4ebe-b60e-0e2bb8d6d6e5",
+      "name": "Extract Links"
+    },
+    {
+      "parameters": {
+        "jsCode": "// КОД ДЛЯ НОДЫ \"Multi-Platform Search Agent\"\nconst products = $input.all();\n\n// Проверяем, что есть товары для поиска\nif (!products || products.length === 0) {\n  return [{\n    json: {\n      error: \"No products found for search\",\n      products: []\n    }\n  }];\n}\n\nconsole.log(`Starting multi-platform search for ${products.length} products`);\n\n// Возвращаем продукты для параллельного поиска на всех площадках\nreturn products.map(product => ({\n  json: {\n    originalProduct: product.json,\n    searchId: Math.random().toString(36).substring(7),\n    timestamp: new Date().toISOString()\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2768,
+        640
+      ],
+      "id": "e46f9b02-1c53-4751-9d23-3078903f500d",
+      "name": "Multi-Platform Search Agent"
+    },
+    {
+      "parameters": {
+        "jsCode": "// КОД ДЛЯ НОДЫ \"Wildberries API Integration\"\nconst searchItems = $input.all();\nconst wbResults = [];\n\nfor (const item of searchItems) {\n  const productData = item.json.originalProduct;\n  \n  console.log(`Searching Wildberries for: ${productData.title}`);\n  \n  try {\n    // Поиск по Wildberries\n    const searchQuery = `${productData.brand} ${productData.title} ${productData.sku}`.trim();\n    \n    // Имитация API запроса (в реальности нужно использовать реальный API)\n    const mockResults = [\n      {\n        platform: 'Wildberries',\n        productId: `wb_${Math.random().toString(36).substring(7)}`,\n        title: productData.title,\n        price: Math.round(Math.random() * 10000) / 100,\n        rating: Math.round((Math.random() * 2 + 3) * 10) / 10, // 3-5 звезд\n        reviewCount: Math.floor(Math.random() * 500),\n        url: `https://www.wildberries.ru/catalog/${Math.random().toString(36).substring(7)}/detail.aspx`,\n        found: true\n      }\n    ];\n    \n    wbResults.push({\n      originalProduct: productData,\n      searchData: item.json,\n      platform: 'Wildberries',\n      results: mockResults,\n      totalFound: mockResults.length\n    });\n    \n  } catch (error) {\n    console.error('Wildberries search error:', error);\n    wbResults.push({\n      originalProduct: productData,\n      searchData: item.json,\n      platform: 'Wildberries',\n      results: [],\n      totalFound: 0,\n      error: error.message\n    });\n  }\n}\n\nreturn wbResults.map(result => ({\n  json: result\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        432
+      ],
+      "id": "dc48c860-acd9-484e-9212-3faf12e9d714",
+      "name": "Wildberries API Integration"
+    },
+    {
+      "parameters": {
+        "jsCode": "// КОД ДЛЯ НОДЫ \"Ozon API Integration\"\nconst searchItems = $input.all();\nconst ozonResults = [];\n\nfor (const item of searchItems) {\n  const productData = item.json.originalProduct;\n  \n  console.log(`Searching Ozon for: ${productData.title}`);\n  \n  try {\n    // Поиск по Ozon (имитация)\n    const mockResults = [\n      {\n        platform: 'Ozon',\n        productId: `oz_${Math.random().toString(36).substring(7)}`,\n        title: productData.title,\n        price: Math.round(Math.random() * 8000) / 100,\n        rating: Math.round((Math.random() * 2 + 3) * 10) / 10,\n        reviewCount: Math.floor(Math.random() * 300),\n        url: `https://ozon.ru/product/${Math.random().toString(36).substring(7)}`,\n        found: true\n      }\n    ];\n    \n    ozonResults.push({\n      originalProduct: productData,\n      searchData: item.json,\n      platform: 'Ozon',\n      results: mockResults,\n      totalFound: mockResults.length\n    });\n    \n  } catch (error) {\n    console.error('Ozon search error:', error);\n    ozonResults.push({\n      originalProduct: productData,\n      searchData: item.json,\n      platform: 'Ozon',\n      results: [],\n      totalFound: 0,\n      error: error.message\n    });\n  }\n}\n\nreturn ozonResults.map(result => ({\n  json: result\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        640
+      ],
+      "id": "73c5ed82-4d2d-430b-bcad-3fd63ada6184",
+      "name": "Ozon API Integration"
+    },
+    {
+      "parameters": {
+        "jsCode": "// КОД ДЛЯ НОДЫ \"SERP Search Integration\"\nconst searchItems = $input.all();\nconst serpResults = [];\n\nfor (const item of searchItems) {\n  const productData = item.json.originalProduct;\n  \n  console.log(`Searching SERP for: ${productData.title}`);\n  \n  try {\n    // Поиск через SERP API (имитация)\n    const mockResults = [\n      {\n        platform: 'Google',\n        title: `Купить ${productData.title} - лучшие цены`,\n        snippet: `Отзывы о ${productData.brand} ${productData.title}. Рейтинг: ${Math.round((Math.random() * 2 + 3) * 10) / 10} звезд`,\n        url: `https://example.com/product/${Math.random().toString(36).substring(7)}`,\n        position: 1,\n        found: true\n      }\n    ];\n    \n    serpResults.push({\n      originalProduct: productData,\n      searchData: item.json,\n      platform: 'SERP',\n      results: mockResults,\n      totalFound: mockResults.length\n    });\n    \n  } catch (error) {\n    console.error('SERP search error:', error);\n    serpResults.push({\n      originalProduct: productData,\n      searchData: item.json,\n      platform: 'SERP',\n      results: [],\n      totalFound: 0,\n      error: error.message\n    });\n  }\n}\n\nreturn serpResults.map(result => ({\n  json: result\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        848
+      ],
+      "id": "4503e7bb-d9ab-4480-9b65-e7dad43f4100",
+      "name": "SERP Search Integration"
+    },
+    {
+      "parameters": {
+        "jsCode": "// КОД ДЛЯ НОДЫ \"Review Data Collector\"\nconst mergedResults = $input.all();\nconst reviewData = [];\n\nfor (const result of mergedResults) {\n  const data = result.json;\n  \n  // Собираем статистику по отзывам со всех платформ\n  let totalReviews = 0;\n  let totalRating = 0;\n  let ratingCount = 0;\n  const platformStats = [];\n  \n  data.allPlatforms.forEach(platform => {\n    platform.results.forEach(product => {\n      if (product.reviewCount) {\n        totalReviews += product.reviewCount;\n      }\n      if (product.rating) {\n        totalRating += product.rating;\n        ratingCount++;\n      }\n      \n      platformStats.push({\n        platform: platform.platform,\n        productTitle: product.title,\n        reviewCount: product.reviewCount || 0,\n        rating: product.rating || null,\n        url: product.url\n      });\n    });\n  });\n  \n  const averageRating = ratingCount > 0 ? totalRating / ratingCount : 0;\n  \n  reviewData.push({\n    originalProduct: data.originalProduct,\n    reviewStatistics: {\n      totalReviews,\n      averageRating: Math.round(averageRating * 10) / 10,\n      platformsWithReviews: platformStats.filter(p => p.reviewCount > 0).length,\n      platformDetails: platformStats\n    },\n    collectedAt: new Date().toISOString()\n  });\n}\n\nreturn reviewData.map(data => ({\n  json: data\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3648,
+        640
+      ],
+      "id": "1bd9378d-55de-4a53-81c7-42592a87695f",
+      "name": "Review Data Collector"
+    },
+    {
+      "parameters": {
+        "jsCode": "// КОД ДЛЯ НОДЫ \"Competitive Analysis Report\"\nconst analyzedData = $input.all();\nconst finalReport = [];\n\nfor (const item of analyzedData) {\n  const data = item.json;\n  \n  // Расчет конкурентных метрик\n  const competitivenessScore = calculateCompetitiveness(data);\n  const demandLevel = calculateDemandLevel(data);\n  const priceScore = calculatePriceCompetitiveness(data);\n  \n  finalReport.push({\n    // Основная информация\n    sku: data.originalProduct.sku || 'N/A',\n    title: data.originalProduct.title || 'N/A',\n    brand: data.originalProduct.brand || 'N/A',\n    originalPrice: data.originalProduct.price || 'N/A',\n    \n    // Статистика отзывов\n    totalReviews: data.reviewStatistics.totalReviews || 0,\n    averageRating: data.reviewStatistics.averageRating || 0,\n    platformsCount: data.reviewStatistics.platformsWithReviews || 0,\n    \n    // AI Анализ\n    positiveThemes: data.aiAnalysis.positiveThemes.join('; '),\n    negativeThemes: data.aiAnalysis.negativeThemes.join('; '),\n    reviewSummary: data.aiAnalysis.summary,\n    sentiment: data.aiAnalysis.sentiment,\n    \n    // Конкурентные метрики\n    competitivenessScore: Math.round(competitivenessScore * 100),\n    demandLevel: Math.round(demandLevel * 100),\n    priceCompetitiveness: Math.round(priceScore * 100),\n    overallScore: Math.round((competitivenessScore + demandLevel + priceScore) / 3 * 100),\n    \n    // Рекомендации\n    recommendations: data.aiAnalysis.recommendations.join('; '),\n    \n    // Метаданные\n    analysisDate: new Date().toISOString(),\n    dataSources: data.reviewStatistics.platformDetails.map(p => p.platform).join(', ')\n  });\n}\n\n// Вспомогательные функции\nfunction calculateCompetitiveness(data) {\n  const reviewScore = Math.min(data.reviewStatistics.totalReviews / 100, 1) * 0.4;\n  const ratingScore = (data.reviewStatistics.averageRating / 5) * 0.3;\n  const platformScore = Math.min(data.reviewStatistics.platformsWithReviews / 3, 1) * 0.3;\n  return reviewScore + ratingScore + platformScore;\n}\n\nfunction calculateDemandLevel(data) {\n  return Math.min(data.reviewStatistics.totalReviews / 200, 1);\n}\n\nfunction calculatePriceCompetitiveness(data) {\n  // Упрощенный расчет (в реальности нужно сравнивать с конкурентами)\n  return 0.7;\n}\n\nreturn finalReport.map(report => ({\n  json: report\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4672,
+        656
+      ],
+      "id": "b8d38cc2-f78e-4f48-a401-9ecff34c6ce2",
+      "name": "Competitive Analysis Report"
+    },
+    {
+      "parameters": {
+        "jsCode": "// КОД ДЛЯ НОДЫ \"Enhanced Google Sheets Export\"\nconst reportData = $input.all();\n\nconst sheetsReadyData = reportData.map(item => ({\n  json: {\n    'Артикул': item.json.sku,\n    'Название товара': item.json.title,\n    'Бренд': item.json.brand,\n    'Цена': item.json.originalPrice,\n    \n    'Количество отзывов': item.json.totalReviews,\n    'Средний рейтинг': item.json.averageRating,\n    'Площадки с отзывами': item.json.platformsCount,\n    \n    'Положительные аспекты': item.json.positiveThemes,\n    'Проблемные аспекты': item.json.negativeThemes,\n    'Анализ отзывов': item.json.reviewSummary,\n    'Тональность': item.json.sentiment,\n    \n    'Конкурентоспособность (%)': item.json.competitivenessScore,\n    'Уровень спроса (%)': item.json.demandLevel,\n    'Ценовая конкуренция (%)': item.json.priceCompetitiveness,\n    'Общий балл (%)': item.json.overallScore,\n    \n    'Рекомендации': item.json.recommendations,\n    'Источники данных': item.json.dataSources,\n    'Дата анализа': item.json.analysisDate\n  }\n}));\n\nconsole.log(`Prepared ${sheetsReadyData.length} records for Google Sheets`);\nreturn sheetsReadyData;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4912,
+        656
+      ],
+      "id": "b5f1c5dd-99a7-4e91-b16d-f801c478a7cd",
+      "name": "Enhanced Google Sheets Export"
+    },
+    {
+      "parameters": {
+        "jsCode": "// КОД ДЛЯ НОДЫ \"Merge Platform Results\"\nconst allPlatformResults = $input.all();\n\n// Группируем результаты по оригинальному товару\nconst groupedResults = {};\n\nallPlatformResults.forEach(result => {\n  const productKey = result.json.originalProduct.sku || result.json.originalProduct.title;\n  \n  if (!groupedResults[productKey]) {\n    groupedResults[productKey] = {\n      originalProduct: result.json.originalProduct,\n      platformResults: []\n    };\n  }\n  \n  groupedResults[productKey].platformResults.push({\n    platform: result.json.platform,\n    results: result.json.results,\n    totalFound: result.json.totalFound,\n    error: result.json.error\n  });\n});\n\n// Преобразуем в массив\nconst mergedResults = Object.values(groupedResults).map(item => ({\n  json: {\n    originalProduct: item.originalProduct,\n    allPlatforms: item.platformResults,\n    totalPlatforms: item.platformResults.length,\n    totalFoundProducts: item.platformResults.reduce((sum, platform) => sum + platform.totalFound, 0),\n    mergeTimestamp: new Date().toISOString()\n  }\n}));\n\nconsole.log(`Merged results for ${mergedResults.length} products`);\nreturn mergedResults;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3424,
+        640
+      ],
+      "id": "483d5da8-ec64-4247-b001-7dade6a0f9aa",
+      "name": "Merge Platform Results"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1-wbWRfwiykBueIuJSKZc9q19JlqQgW1qvj9rG5evPHA",
+          "mode": "list",
+          "cachedResultName": "Parser-Products",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1-wbWRfwiykBueIuJSKZc9q19JlqQgW1qvj9rG5evPHA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1-wbWRfwiykBueIuJSKZc9q19JlqQgW1qvj9rG5evPHA/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Артикул": "={{ $json[\"Артикул\"] }}",
+            "Название товара": "={{ $json[\"Название товара\"] }}",
+            "Бренд": "={{ $json[\"Бренд\"] }}",
+            "Цена": "={{ $json[\"Цена\"] }}",
+            "Количество отзывов": "={{ $json[\"Количество отзывов\"] }}",
+            "Средний рейтинг": "={{ $json[\"Средний рейтинг\"] }}",
+            "Площадки с отзывами": "={{ $json[\"Площадки с отзывами\"] }}",
+            "Положительные аспекты": "={{ $json[\"Положительные аспекты\"] }}",
+            "Проблемные аспекты": "={{ $json[\"Проблемные аспекты\"] }}",
+            "Анализ отзывов": "={{ $json[\"Анализ отзывов\"] }}",
+            "Тональность": "={{ $json[\"Тональность\"] }}",
+            "Конкурентоспособность (%)": "={{ $json[\"Конкурентоспособность (%)\"] }}",
+            "Уровень спроса (%)": "={{ $json[\"Уровень спроса (%)\"] }}",
+            "Ценовая конкуренция (%)": "={{ $json[\"Ценовая конкуренция (%)\"] }}",
+            "Общий балл (%)": "={{ $json[\"Общий балл (%)\"] }}",
+            "Рекомендации": "={{ $json[\"Рекомендации\"] }}",
+            "Источники данных": "={{ $json[\"Источники данных\"] }}",
+            "Дата анализа": "={{ $json[\"Дата анализа\"] }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Артикул",
+              "displayName": "Артикул",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Название товара",
+              "displayName": "Название товара",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Бренд",
+              "displayName": "Бренд",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Цена",
+              "displayName": "Цена",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Количество отзывов",
+              "displayName": "Количество отзывов",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Средний рейтинг",
+              "displayName": "Средний рейтинг",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Площадки с отзывами",
+              "displayName": "Площадки с отзывами",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Положительные аспекты",
+              "displayName": "Положительные аспекты",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Проблемные аспекты",
+              "displayName": "Проблемные аспекты",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Анализ отзывов",
+              "displayName": "Анализ отзывов",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Тональность",
+              "displayName": "Тональность",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Конкурентоспособность (%)",
+              "displayName": "Конкурентоспособность (%)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Уровень спроса (%)",
+              "displayName": "Уровень спроса (%)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Ценовая конкуренция (%)",
+              "displayName": "Ценовая конкуренция (%)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Общий балл (%)",
+              "displayName": "Общий балл (%)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Рекомендации",
+              "displayName": "Рекомендации",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Источники данных",
+              "displayName": "Источники данных",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Дата анализа",
+              "displayName": "Дата анализа",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        5152,
+        656
+      ],
+      "id": "1805f48a-4920-43b8-b10f-3a81139d6b13",
+      "name": "Save to Google Sheets2",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "D4WG1yGJIpIeyIXM",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// КОД ДЛЯ НОДЫ \"Prepare Data for AI Agent\"\nconst reviewData = $input.all();\nconst preparedData = [];\n\nfor (const item of reviewData) {\n  const data = item.json;\n  \n  // Если отзывов нет - создаем базовый анализ\n  if (data.reviewStatistics.totalReviews === 0) {\n    preparedData.push({\n      json: {\n        originalProduct: data.originalProduct,\n        reviewStatistics: data.reviewStatistics,\n        skipAnalysis: true,\n        basicAnalysis: {\n          sentiment: \"neutral\",\n          sentimentScore: 0.5,\n          positiveThemes: [\"Недостаточно данных для анализа\"],\n          negativeThemes: [],\n          summary: \"Отзывов не найдено для глубокого анализа\",\n          confidence: 0.1,\n          recommendations: [\n            \"Стимулировать покупателей оставлять отзывы\",\n            \"Улучшить видимость товара на маркетплейсах\"\n          ]\n        }\n      }\n    });\n    continue;\n  }\n  \n  // Если есть отзывы - отправляем в AI анализ\n  preparedData.push({\n    json: {\n      originalProduct: data.originalProduct,\n      reviewStatistics: data.reviewStatistics,\n      skipAnalysis: false,\n      // Эти данные будут использоваться в userMessage AI-ноды\n      analysisReady: true,\n      productTitle: data.originalProduct.title,\n      productBrand: data.originalProduct.brand,\n      totalReviews: data.reviewStatistics.totalReviews,\n      averageRating: data.reviewStatistics.averageRating,\n      platforms: data.reviewStatistics.platformDetails.map(p => p.platform).join(', '),\n      platformDetails: data.reviewStatistics.platformDetails\n    }\n  });\n}\n\nreturn preparedData;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3872,
+        640
+      ],
+      "id": "e8205591-93ce-4f4b-98a8-724efa269d41",
+      "name": "Prepare Data for AI Agent"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=ПРОДУКТ: {{ $json.originalProduct.allProducts[0].title || \"Не указано\" }}\nБРЕНД: {{ $json.originalProduct.allProducts[0].brand || \"Не указано\" }}\n\nСТАТИСТИКА ОТЗЫВОВ:\n- Всего отзывов: {{ $json.reviewStatistics.totalReviews || 0 }}\n- Средний рейтинг: {{ $json.reviewStatistics.averageRating || 0 }}/5\n- Платформы с отзывами: {{ $json.reviewStatistics.platformDetails.map(p => p.platform).join(', ') || \"Нет данных\" }}\n\nДЕТАЛИ ПО ПЛАТФОРМАМ:\n{{ $json.reviewStatistics.platformDetails && $json.reviewStatistics.platformDetails.length > 0 \n  ? $json.reviewStatistics.platformDetails.map(p => `• ${p.platform}: ${p.reviewCount || 0} отзывов, рейтинг ${p.rating || 'N/A'}`).join('\\n')\n  : \"• Нет данных по платформам\" }}",
+        "options": {
+          "systemMessage": "Ты - профессиональный аналитик отзывов покупателей. Твоя задача - анализировать статистику отзывов о товарах и предоставлять структурированную аналитику на русском языке.\n\nТВОИ ОСНОВНЫЕ ФУНКЦИИ:\n1. Анализ тональности отзывов (позитивная/нейтральная/негативная)\n2. Выявление ключевых тем и проблем\n3. Генерация рекомендаций для улучшения товара\n4. Оценка уровня удовлетворенности покупателей\n\nФОРМАТ ОТВЕТА - строго JSON:\n{\n  \"sentiment\": \"positive/neutral/negative\",\n  \"sentimentScore\": 0.85,\n  \"positiveThemes\": [\"тема1\", \"тема2\"],\n  \"negativeThemes\": [\"проблема1\", \"проблема2\"],\n  \"summary\": \"краткое резюме на русском\",\n  \"confidence\": 0.9,\n  \"recommendations\": [\"рекомендация1\", \"рекомендация2\"]\n}\n\nВАЖНО:\n- Будь объективным и точным\n- Предоставляй конкретные рекомендации\n- Используй данные из статистики\n- Всегда возвращай валидный JSON\n- Если отзывов мало, укажи это в рекомендациях"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        4064,
+        656
+      ],
+      "id": "297667e5-d7c6-4d05-b074-76fc06f3a39f",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "jsCode": "// КОД ДЛЯ НОДЫ \"Process AI Results\"\nconst aiResults = $input.all();\nconst processedResults = [];\n\nfor (const item of aiResults) {\n  const data = item.json;\n  \n  try {\n    // Если анализ был пропущен (нет отзывов)\n    if (data.skipAnalysis) {\n      processedResults.push({\n        json: {\n          originalProduct: data.originalProduct,\n          reviewStatistics: data.reviewStatistics,\n          aiAnalysis: data.basicAnalysis,\n          analyzedAt: new Date().toISOString(),\n          analysisType: \"basic\"\n        }\n      });\n      continue;\n    }\n    \n    // Парсим JSON ответ от AI - ОБНОВЛЕННАЯ ЛОГИКА\n    let aiAnalysis;\n    \n    // Получаем ответ из разных возможных полей\n    const rawResponse = data.aiResponse || data.response || data.output || data;\n    \n    if (typeof rawResponse === 'string') {\n      // Если ответ пришел как строка с backticks\n      if (rawResponse.includes(\"```json\")) {\n        const jsonMatch = rawResponse.match(/```json\\n([\\s\\S]*?)\\n```/);\n        if (jsonMatch && jsonMatch[1]) {\n          aiAnalysis = JSON.parse(jsonMatch[1].trim());\n        } else {\n          throw new Error('Invalid JSON format with backticks');\n        }\n      }\n      // Если ответ пришел как чистая JSON строка\n      else if (rawResponse.trim().startsWith(\"{\")) {\n        const cleanedResponse = rawResponse.trim();\n        // Убираем возможные начальные/конечные символы\n        const jsonMatch = cleanedResponse.match(/\\{[\\s\\S]*\\}/);\n        if (jsonMatch) {\n          aiAnalysis = JSON.parse(jsonMatch[0]);\n        } else {\n          throw new Error('Invalid JSON string format');\n        }\n      }\n      // Если это уже парсимый объект в строке\n      else {\n        try {\n          aiAnalysis = JSON.parse(rawResponse);\n        } catch {\n          throw new Error('Unable to parse AI response string');\n        }\n      }\n    }\n    // Если ответ уже объект\n    else if (typeof rawResponse === 'object') {\n      // Проверяем, если это уже структурированный анализ\n      if (rawResponse.sentiment || rawResponse.summary) {\n        aiAnalysis = rawResponse;\n      }\n      // Если объект содержит JSON в поле (например, от n8n LangChain)\n      else if (rawResponse.text) {\n        const text = rawResponse.text;\n        if (text.includes(\"```json\")) {\n          const jsonMatch = text.match(/```json\\n([\\s\\S]*?)\\n```/);\n          if (jsonMatch && jsonMatch[1]) {\n            aiAnalysis = JSON.parse(jsonMatch[1].trim());\n          }\n        } else if (text.trim().startsWith(\"{\")) {\n          const jsonMatch = text.match(/\\{[\\s\\S]*\\}/);\n          if (jsonMatch) {\n            aiAnalysis = JSON.parse(jsonMatch[0]);\n          }\n        }\n      }\n      else {\n        // Используем как есть\n        aiAnalysis = rawResponse;\n      }\n    } else {\n      throw new Error('Unexpected AI response format: ' + typeof rawResponse);\n    }\n    \n    // ВАЛИДАЦИЯ и нормализация структуры анализа\n    const validatedAnalysis = {\n      sentiment: aiAnalysis.sentiment || \"neutral\",\n      sentimentScore: parseFloat(aiAnalysis.sentimentScore || 0.5),\n      positiveThemes: Array.isArray(aiAnalysis.positiveThemes) \n        ? aiAnalysis.positiveThemes.filter(t => t && typeof t === 'string')\n        : [],\n      negativeThemes: Array.isArray(aiAnalysis.negativeThemes) \n        ? aiAnalysis.negativeThemes.filter(t => t && typeof t === 'string')\n        : [],\n      summary: aiAnalysis.summary && typeof aiAnalysis.summary === 'string' \n        ? aiAnalysis.summary \n        : \"Анализ не выполнен\",\n      confidence: parseFloat(aiAnalysis.confidence || 0.5),\n      recommendations: Array.isArray(aiAnalysis.recommendations) \n        ? aiAnalysis.recommendations.filter(r => r && typeof r === 'string')\n        : []\n    };\n    \n    // Добавляем метаданные и исходные данные\n    processedResults.push({\n      json: {\n        // Сохраняем исходные данные\n        originalProduct: data.originalProduct || {},\n        reviewStatistics: data.reviewStatistics || {\n          totalReviews: 0,\n          averageRating: 0,\n          platformsWithReviews: 0,\n          platformDetails: []\n        },\n        \n        // AI анализ\n        aiAnalysis: validatedAnalysis,\n        \n        // Метаданные\n        analyzedAt: new Date().toISOString(),\n        analysisType: \"ai_advanced\",\n        rawResponseType: typeof rawResponse,\n        responsePreview: typeof rawResponse === 'string' \n          ? rawResponse.substring(0, 200) + (rawResponse.length > 200 ? \"...\" : \"\")\n          : \"Object\",\n        \n        // Для удобства также добавляем основные поля на верхний уровень\n        productTitle: data.originalProduct?.title || \n                     data.originalProduct?.allProducts?.[0]?.title || \n                     \"Неизвестный товар\",\n        brand: data.originalProduct?.brand || \n               data.originalProduct?.allProducts?.[0]?.brand || \n               \"Неизвестный бренд\",\n        \n        // Копируем анализ для прямого доступа\n        sentiment: validatedAnalysis.sentiment,\n        sentimentScore: validatedAnalysis.sentimentScore,\n        summary: validatedAnalysis.summary\n      }\n    });\n    \n  } catch (error) {\n    console.error('AI result processing error:', error);\n    console.error('Problematic data:', JSON.stringify(data, null, 2).substring(0, 500));\n    \n    // Резервный анализ при ошибке\n    processedResults.push({\n      json: {\n        originalProduct: data.originalProduct || {},\n        reviewStatistics: data.reviewStatistics || {\n          totalReviews: 0,\n          averageRating: 0,\n          platformsWithReviews: 0,\n          platformDetails: []\n        },\n        aiAnalysis: {\n          sentiment: \"neutral\",\n          sentimentScore: 0.5,\n          positiveThemes: [\"Ошибка обработки AI анализа: \" + error.message],\n          negativeThemes: [],\n          summary: \"Не удалось обработать результаты AI анализа\",\n          confidence: 0.1,\n          recommendations: [\n            \"Проверить формат ответа AI модели\",\n            \"Убедиться в корректности входных данных\"\n          ]\n        },\n        analyzedAt: new Date().toISOString(),\n        analysisType: \"error_fallback\",\n        error: error.message,\n        rawResponsePreview: JSON.stringify(data, null, 2).substring(0, 500)\n      }\n    });\n  }\n}\n\nconsole.log(`Processed ${processedResults.length} AI results`);\nreturn processedResults;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4448,
+        656
+      ],
+      "id": "6d8b06c8-655d-45b8-800c-2c072ef4df2c",
+      "name": "Process AI Results"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 1000,
+          "temperature": 0.3,
+          "topP": 1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        4016,
+        864
+      ],
+      "id": "9de30818-a450-411f-8fae-c76ab8bd12bf",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "wXhxRVQdcazoFAWG",
+          "name": "OpenAi NICS"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Check URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check URL": {
+      "main": [
+        [
+          {
+            "node": "Check Site Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Crawl": {
+      "main": [
+        [
+          {
+            "node": "Send Start Message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Page (Browserless)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Page (Browserless)": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Extract Categories",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Typing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Product": {
+      "main": [
+        [
+          {
+            "node": "Collect All Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Categories": {
+      "main": [
+        [
+          {
+            "node": "Fetch Category Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Categories": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Category Page": {
+      "main": [
+        [
+          {
+            "node": "Extract Products from Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Products from Category": {
+      "main": [
+        [
+          {
+            "node": "Fetch ALL Product Pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch ALL Product Pages": {
+      "main": [
+        [
+          {
+            "node": "Parse Product",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect All Products": {
+      "main": [
+        [
+          {
+            "node": "Send Results",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare for Google Sheets",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Multi-Platform Search Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare for Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Site Type": {
+      "main": [
+        [
+          {
+            "node": "Initialize Crawl",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Initialize Crawl1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Summary Message": {
+      "main": [
+        [
+          {
+            "node": "Detect Catalog Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Catalog Page": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Products": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Extract Product Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Product Links": {
+      "main": [
+        [
+          {
+            "node": "Split Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Products": {
+      "main": [
+        [
+          {
+            "node": "Fetch all Product Pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch all Product Pages": {
+      "main": [
+        [
+          {
+            "node": "Parse Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Products": {
+      "main": [
+        [
+          {
+            "node": "Collect all Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect all Products": {
+      "main": [
+        [
+          {
+            "node": "Send a Product message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Multi-Platform Search Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Crawl1": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 2
+          },
+          {
+            "node": "Fetch Page",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Page": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "Extract Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Links": {
+      "main": [
+        [
+          {
+            "node": "Format Summary Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Multi-Platform Search Agent": {
+      "main": [
+        [
+          {
+            "node": "Wildberries API Integration",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ozon API Integration",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "SERP Search Integration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review Data Collector": {
+      "main": [
+        [
+          {
+            "node": "Prepare Data for AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ozon API Integration": {
+      "main": [
+        [
+          {
+            "node": "Merge Platform Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SERP Search Integration": {
+      "main": [
+        [
+          {
+            "node": "Merge Platform Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wildberries API Integration": {
+      "main": [
+        [
+          {
+            "node": "Merge Platform Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Platform Results": {
+      "main": [
+        [
+          {
+            "node": "Review Data Collector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Competitive Analysis Report": {
+      "main": [
+        [
+          {
+            "node": "Enhanced Google Sheets Export",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enhanced Google Sheets Export": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Sheets2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Data for AI Agent": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Process AI Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process AI Results": {
+      "main": [
+        [
+          {
+            "node": "Competitive Analysis Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "8a0fb0c0-77cc-42d8-94f8-4381a6533cb6",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "7b81a2a32c6ff5451b59865825206bad9323179bea809e4482dfa3ba35b31ac9"
+  },
+  "id": "WB4rMyKVR3IJWeVN",
+  "tags": [
+    {
+      "updatedAt": "2025-08-03T13:25:17.615Z",
+      "createdAt": "2025-08-03T13:25:17.615Z",
+      "id": "NLGJA9WQgGTIaE99",
+      "name": "NICS AI"
+    }
+  ]
+}
